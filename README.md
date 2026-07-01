@@ -60,6 +60,37 @@ to the project root. Binaries land in `target/release/`.
 
 ---
 
+## Running on a VM / headless (software OpenGL)
+
+The GUI renders with OpenGL (egui/glow). On a normal Windows machine with a GPU this
+just works — it uses the system's hardware OpenGL. **On a VM with no 3D acceleration**
+(e.g. VMware Horizon, some RDP sessions) there's no OpenGL driver and the window won't
+open; you'll see `egui_glow requires opengl 2.0+` in `fast6_error.log` (written next to
+the exe and in `%TEMP%`).
+
+Fix: drop **Mesa's software-OpenGL DLLs** next to `fast6.exe` / `fast6d.exe`:
+
+- `opengl32.dll`
+- `libgallium_wgl.dll`
+
+Windows loads DLLs from the exe's folder before the system ones, so these shadow the
+system `opengl32.dll`. The app then sets `GALLIUM_DRIVER=llvmpipe` automatically to get
+CPU-rendered OpenGL, and the window opens. NVENC encoding is done by ffmpeg in a separate
+process, so it's **not** affected by software rendering.
+
+Where to get them: prebuilt Mesa3D for Windows — the
+[mesa-dist-win](https://github.com/pal1000/mesa-dist-win/releases) releases (the
+"desktop-gl" / MSVC package ships `opengl32.dll` + `libgallium_wgl.dll`, x64).
+
+Notes:
+- **Not needed on normal Windows** — the DLLs are only required where hardware OpenGL is
+  missing. If you leave them next to the exe on a normal PC it still works, just rendered
+  in software; set `GALLIUM_DRIVER=d3d12` to force hardware, or simply don't ship the DLLs.
+- These DLLs are **not tracked in this repo** (`.gitignore`) because of their size
+  (`libgallium_wgl.dll` is ~59 MB). Download them from the link above when you need them.
+
+---
+
 ## Usage
 
 ### Local mode
