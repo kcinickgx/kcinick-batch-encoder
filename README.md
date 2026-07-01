@@ -175,6 +175,12 @@ single writer thread multiplexes control messages and result chunks over one soc
 **prioritizing control** so the input-feeding `ReadBlock` requests never get starved by
 the outgoing result stream.
 
+While encoding, the daemon writes its temporary output to a `fast6d/` folder inside the
+**system temp dir** (`%TEMP%\fast6d` on Windows, `/tmp/fast6d` on Linux) — not the current
+directory — so running the daemon and a client in the same folder never clobbers anything.
+That temp file is deleted once it's been streamed to the client (override with `--out` /
+`FAST6_OUT`).
+
 ---
 
 ## Project layout

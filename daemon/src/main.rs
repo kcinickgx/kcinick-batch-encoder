@@ -993,6 +993,14 @@ fn arg_val(args: &[String], key: &str) -> Option<String> {
     args.iter().position(|a| a == key).and_then(|i| args.get(i + 1)).cloned()
 }
 
+/// The daemon's temporary output folder, inside the SYSTEM temp dir
+/// (e.g. `%TEMP%\fast6d` on Windows, `/tmp/fast6d` on Linux). Kept separate from the
+/// client's own `reencoded/` so running the daemon and a client in the same folder
+/// doesn't clobber anything. Overridable with `--out` / `FAST6_OUT`.
+fn default_out_dir() -> String {
+    std::env::temp_dir().join("fast6d").to_string_lossy().into_owned()
+}
+
 // ===================== server start/stop =====================
 fn make_server(token: String, ffmpeg: String, out_dir: String, shim_port: u16) -> Arc<Server> {
     let ffprobe = encoder::ffprobe_from_ffmpeg(&ffmpeg);
@@ -1081,7 +1089,7 @@ fn run_console(args: &[String]) {
         .unwrap_or(7879);
     let out_dir = arg_val(args, "--out")
         .or_else(|| std::env::var("FAST6_OUT").ok())
-        .unwrap_or_else(|| "reencoded".into());
+        .unwrap_or_else(default_out_dir);
 
     let srv = make_server(token, ffmpeg, out_dir, shim_port);
     if let Err(e) = start_server(&srv, port) {
@@ -1253,7 +1261,7 @@ impl DaemonApp {
         let srv = make_server(
             self.token.clone(),
             self.ffmpeg.clone(),
-            "reencoded".into(),
+            default_out_dir(),
             self.shim_port,
         );
         match start_server(&srv, port) {
