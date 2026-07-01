@@ -33,10 +33,11 @@ Written in Rust (egui/eframe). Windows-first.
 
 | Binary | What it is |
 |---|---|
-| `fast6.exe` | The **GUI client** (egui). Queue files, watch progress, run locally or against a remote daemon. |
-| `fast6d.exe` | The **encoding daemon**: a queue + parallel workers + an on-demand read shim. Has a small GUI and a system-tray icon. |
+| `fast6` (`fast6.exe`) | The **GUI client** (egui, Windows). Queue files, watch progress, run locally or against a remote daemon. |
+| `fast6d` (`fast6d.exe`) | The **encoding daemon** (Windows): a queue + parallel workers + an on-demand read shim. Has a small GUI and a system-tray icon. |
+| `fast6t` | The **TUI client** (ratatui, **Linux**). Same layout and features as the GUI, in the terminal, with mouse support. |
 
-Both share the encoding logic (`src/encoder.rs`) and the client↔daemon protocol
+All three share the encoding logic (`src/encoder.rs`) and the client↔daemon protocol
 (`src/proto.rs`).
 
 ---
@@ -117,6 +118,29 @@ back into `<source folder>/reencoded/` while it encodes — nothing is left on t
 
 > Over the internet, put both machines on a mesh VPN like **Tailscale** to sidestep NAT.
 
+### TUI client (Linux)
+
+`fast6t` is a **Linux** terminal client with the same layout and features as the GUI
+(Local and Remote modes, live streams/progress/ETA, crop/codec/preset/bitrate, per-slot
+keys), rendered with [ratatui](https://ratatui.rs) and full mouse support (click, hover,
+scroll) plus a built-in file explorer with per-file/per-folder include checkboxes.
+
+Build it (on Linux):
+
+```
+cargo build --release -p fast6tui     # binary: target/release/fast6t
+```
+
+It reuses the same `encoder.rs` and `proto.rs` as the GUI/daemon, so it talks to the
+**same daemon**. Config is stored in `~/.config/fast6/config.json` (the Linux equivalent
+of the GUI's Windows-registry settings). Typical use: run `fast6d` on the Windows box with
+the GPU, run `fast6t` on a Linux machine, switch it to **Remote**, and encode your local
+files against the remote GPU. `ffmpeg`/`ffprobe` must be on `PATH` (or set the path) only
+for **Local** mode.
+
+> `fast6t` also compiles on Windows (crossterm is cross-platform), but it's built and
+> intended for Linux terminals.
+
 ---
 
 ## How encoding is decided
@@ -156,8 +180,9 @@ the outgoing result stream.
 ## Project layout
 
 ```
-src/main.rs        GUI client (egui)
+src/main.rs        GUI client (egui, Windows)
 src/encoder.rs     shared: probe, codec/encoder selection, ffmpeg arg building
 src/proto.rs       shared: client<->daemon wire protocol
 daemon/src/main.rs encoding daemon (workers, shim, tray GUI)
+tui/src/           TUI client (ratatui, Linux) — app/client/controller/ui/widgets/…
 ```

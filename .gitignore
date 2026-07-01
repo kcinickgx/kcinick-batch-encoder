@@ -12,3 +12,10 @@ opengl32.dll
 .claude/
 .vscode/
 .idea/
+
+# Test media / encoder output — never commit videos
+*.mkv
+*.mp4
+*.avi
+*.mov
+reencoded/
