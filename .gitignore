@@ -1,0 +1,14 @@
+# Rust build output
+/target
+
+# Built binaries (users build from source)
+*.exe
+
+# Bundled software-OpenGL runtime DLLs (Windows) — not source
+libgallium_wgl.dll
+opengl32.dll
+
+# Editor / tooling
+.claude/
+.vscode/
+.idea/

@@ -1,0 +1,19 @@
+[package]
+name = "fast6d"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fast6d"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+eframe = "0.31"
+egui = "0.31"
+tray-icon = "0.19"
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
