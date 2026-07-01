@@ -158,6 +158,25 @@ fn reserve_out(srv: &Server, filename: &str) -> PathBuf {
     srv.out_dir.join(candidate)
 }
 
+/// Shortened command for display: "ffmpeg … {source} … {target}" (the input URL and the
+/// output path are replaced so the client shows a clean line, like it does in Local mode).
+fn display_cmd(args: &[String]) -> String {
+    let mut disp = String::from("ffmpeg");
+    let n = args.len();
+    for (idx, a) in args.iter().enumerate() {
+        let token = if idx > 0 && args[idx - 1] == "-i" {
+            "{source}"
+        } else if idx == n - 1 {
+            "{target}"
+        } else {
+            a.as_str()
+        };
+        disp.push(' ');
+        disp.push_str(token);
+    }
+    disp
+}
+
 // ===================== block reads =====================
 fn read_block(srv: &Server, job: &Job, offset: u64, len: u32) -> io::Result<Vec<u8>> {
     match &job.source {
@@ -615,6 +634,7 @@ fn run_job(srv: &Arc<Server>, job_id: &str) {
             job_id: job_id.into(),
             source: (&probe.streams).into(),
             target: (&target).into(),
+            cmd: display_cmd(&args),
         });
     }
 

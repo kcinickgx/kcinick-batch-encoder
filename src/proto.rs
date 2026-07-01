@@ -120,7 +120,13 @@ pub enum D2C {
     Denied { msg: String },
     ReadBlock { req_id: u64, job_id: String, offset: u64, len: u32 },
     State { job_id: String, state: String, detail: String },
-    Streams { job_id: String, source: SummaryDto, target: SummaryDto },
+    Streams {
+        job_id: String,
+        source: SummaryDto,
+        target: SummaryDto,
+        #[serde(default)]
+        cmd: String, // shortened ffmpeg command ("ffmpeg … {source} … {target}")
+    },
     Progress {
         job_id: String,
         frame: String,

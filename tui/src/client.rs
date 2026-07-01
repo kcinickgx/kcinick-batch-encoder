@@ -168,10 +168,13 @@ pub fn daemon_reader(
                     }
                 }
             }
-            D2C::Streams { job_id, source, target } => {
+            D2C::Streams { job_id, source, target, cmd } => {
                 if let Some(i) = slot_of.lock().unwrap().get(&job_id).copied() {
                     *slots[i].streams.lock().unwrap() = dto_to_summary(&source);
                     *slots[i].target.lock().unwrap() = dto_to_summary(&target);
+                    if !cmd.is_empty() {
+                        *slots[i].cmdline.lock().unwrap() = cmd;
+                    }
                 }
             }
             D2C::Progress {
