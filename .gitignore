@@ -19,3 +19,9 @@ opengl32.dll
 *.avi
 *.mov
 reencoded/
+
+# Release artifacts / built binaries
+/dist/
+/fast6t
+*.zip
+*.tar.gz
