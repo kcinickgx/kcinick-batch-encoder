@@ -1206,6 +1206,11 @@ struct DaemonApp {
     server: Option<Arc<Server>>,
     status: String,
     hwnd: Arc<AtomicIsize>,
+    // Window hidden in the tray. We hide with raw Win32 ShowWindow, so eframe never
+    // learns the window is gone and would happily keep repainting 4x/s — with llvmpipe
+    // (software GL) that's constant CPU for an invisible window. While hidden we stop
+    // requesting repaints entirely; the tray callbacks clear the flag and wake us up.
+    hidden: Arc<AtomicBool>,
     _tray: Option<tray_icon::TrayIcon>,
 }
 
@@ -1216,13 +1221,20 @@ impl DaemonApp {
         // Window HWND (from CreationContext if it's already there; otherwise taken in update()).
         let hwnd = Arc::new(AtomicIsize::new(hwnd_of(cc)));
 
+        let hidden = Arc::new(AtomicBool::new(false));
+
         // Tray events go through a CALLBACK (runs on the message pump, NOT in update()),
-        // so it works even when the window is hidden. Show/close via Win32.
+        // so it works even when the window is hidden. Show/close via Win32. On show we
+        // clear `hidden` and request a repaint to restart the (stopped) repaint loop.
         {
             let hw = Arc::clone(&hwnd);
+            let hd = Arc::clone(&hidden);
+            let ectx = cc.egui_ctx.clone();
             tray_icon::menu::MenuEvent::set_event_handler(Some(move |ev: tray_icon::menu::MenuEvent| {
                 if ev.id == show_id {
+                    hd.store(false, Ordering::SeqCst);
                     win_show(hw.load(Ordering::SeqCst));
+                    ectx.request_repaint();
                 } else if ev.id == quit_id {
                     std::process::exit(0);
                 }
@@ -1230,13 +1242,17 @@ impl DaemonApp {
         }
         {
             let hw = Arc::clone(&hwnd);
+            let hd = Arc::clone(&hidden);
+            let ectx = cc.egui_ctx.clone();
             tray_icon::TrayIconEvent::set_event_handler(Some(move |ev: tray_icon::TrayIconEvent| {
                 if let tray_icon::TrayIconEvent::Click {
                     button: tray_icon::MouseButton::Left,
                     ..
                 } = ev
                 {
+                    hd.store(false, Ordering::SeqCst);
                     win_show(hw.load(Ordering::SeqCst));
+                    ectx.request_repaint();
                 }
             }));
         }
@@ -1249,6 +1265,7 @@ impl DaemonApp {
             server: None,
             status: "stopped".into(),
             hwnd,
+            hidden,
             _tray: tray,
         }
     }
@@ -1296,12 +1313,14 @@ impl eframe::App for DaemonApp {
         if ctx.input(|i| i.viewport().close_requested()) {
             if self.server.is_some() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.hidden.store(true, Ordering::SeqCst);
                 win_hide(hwnd);
             } else {
                 std::process::exit(0);
             }
         }
         if ctx.input(|i| i.viewport().minimized == Some(true)) {
+            self.hidden.store(true, Ordering::SeqCst);
             win_hide(hwnd);
         }
 
@@ -1411,7 +1430,21 @@ impl eframe::App for DaemonApp {
             }
         });
 
-        ctx.request_repaint_after(Duration::from_millis(250));
+        // Repaint policy: NOTHING while hidden in the tray (with llvmpipe every frame is
+        // CPU-rendered — repainting an invisible window burned ~3.5% CPU at idle). While
+        // visible: 1s tick when idle (static UI), 250ms only when there's real activity.
+        if !self.hidden.load(Ordering::SeqCst) {
+            let busy = self.server.as_ref().is_some_and(|s| {
+                !s.clients.lock().unwrap().is_empty()
+                    || !s.running.lock().unwrap().is_empty()
+                    || !s.queue.lock().unwrap().is_empty()
+            });
+            ctx.request_repaint_after(if busy {
+                Duration::from_millis(250)
+            } else {
+                Duration::from_secs(1)
+            });
+        }
     }
 }
 
