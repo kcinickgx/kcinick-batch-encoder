@@ -1140,25 +1140,69 @@ fn hwnd_of(h: &impl raw_window_handle::HasWindowHandle) -> isize {
         .unwrap_or(0)
 }
 
-// Hide / show the window with the raw Windows API (eframe doesn't call update()
-// when it's hidden, so viewport commands are useless there).
+// "Hide"/show the window to/from the tray.
+//
+// IMPORTANT: we do NOT use SW_HIDE or minimize. On Windows, a hidden/minimized winit
+// window makes eframe's event loop busy-spin a full CPU core (measured ~3% of a 32-core
+// box = 100% of one core), and it happens BELOW our update() (which isn't even called
+// while hidden), so we can't throttle it. Instead we keep the window SHOWN but move it
+// far off-screen: invisible to the user, but winit is happy and the loop idles at ~0%.
+// A brief SW_HIDE is only used to toggle WS_EX_TOOLWINDOW so no taskbar button lingers.
+#[cfg(windows)]
+static SAVED_POS: AtomicU64 = AtomicU64::new(0);
+
 #[cfg(windows)]
 fn win_hide(hwnd: isize) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
-    if hwnd != 0 {
-        unsafe {
-            ShowWindow(hwnd as _, SW_HIDE);
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, GetWindowRect, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE,
+        SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WS_EX_TOOLWINDOW,
+    };
+    if hwnd == 0 {
+        return;
+    }
+    unsafe {
+        let h = hwnd as *mut core::ffi::c_void;
+        // remember where it was so we can put it back on show
+        let mut r: RECT = std::mem::zeroed();
+        if GetWindowRect(h, &mut r) != 0 && r.left > -30000 {
+            let packed = (((r.left as u32) as u64) << 32) | (r.top as u32) as u64;
+            SAVED_POS.store(packed, Ordering::SeqCst);
         }
+        // toggle tool-window (drops the taskbar button); needs a hide to re-register
+        ShowWindow(h, SW_HIDE);
+        let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+        SetWindowLongPtrW(h, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW as isize);
+        // move far off-screen, then show WITHOUT activating (visible to winit -> no spin)
+        SetWindowPos(h, std::ptr::null_mut(), -32000, -32000, 0, 0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        ShowWindow(h, SW_SHOWNA);
     }
 }
 #[cfg(windows)]
 fn win_show(hwnd: isize) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
-    if hwnd != 0 {
-        unsafe {
-            ShowWindow(hwnd as _, SW_RESTORE);
-            SetForegroundWindow(hwnd as _);
-        }
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+        GWL_EXSTYLE, SW_HIDE, SW_SHOW, SWP_NOSIZE, SWP_NOZORDER, WS_EX_TOOLWINDOW,
+    };
+    if hwnd == 0 {
+        return;
+    }
+    unsafe {
+        let h = hwnd as *mut core::ffi::c_void;
+        let packed = SAVED_POS.load(Ordering::SeqCst);
+        let (x, y) = if packed != 0 {
+            ((packed >> 32) as u32 as i32, (packed & 0xffff_ffff) as u32 as i32)
+        } else {
+            (200, 200)
+        };
+        // drop the tool-window flag (restore taskbar button)
+        ShowWindow(h, SW_HIDE);
+        let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+        SetWindowLongPtrW(h, GWL_EXSTYLE, ex & !(WS_EX_TOOLWINDOW as isize));
+        SetWindowPos(h, std::ptr::null_mut(), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+        ShowWindow(h, SW_SHOW);
+        SetForegroundWindow(h);
     }
 }
 #[cfg(not(windows))]
@@ -1206,10 +1250,8 @@ struct DaemonApp {
     server: Option<Arc<Server>>,
     status: String,
     hwnd: Arc<AtomicIsize>,
-    // Window hidden in the tray. We hide with raw Win32 ShowWindow, so eframe never
-    // learns the window is gone and would happily keep repainting 4x/s — with llvmpipe
-    // (software GL) that's constant CPU for an invisible window. While hidden we stop
-    // requesting repaints entirely; the tray callbacks clear the flag and wake us up.
+    // True while "in the tray" (moved off-screen by win_hide). Used to skip repaints so we
+    // don't render the off-screen window; the tray callbacks clear it and wake us on Show.
     hidden: Arc<AtomicBool>,
     _tray: Option<tray_icon::TrayIcon>,
 }
@@ -1430,9 +1472,9 @@ impl eframe::App for DaemonApp {
             }
         });
 
-        // Repaint policy: NOTHING while hidden in the tray (with llvmpipe every frame is
-        // CPU-rendered — repainting an invisible window burned ~3.5% CPU at idle). While
-        // visible: 1s tick when idle (static UI), 250ms only when there's real activity.
+        // Repaint policy: none while in the tray (off-screen), so we don't waste CPU
+        // rendering an invisible window with llvmpipe. While visible: 1s tick when idle
+        // (static UI), 250ms only when there's real activity to show.
         if !self.hidden.load(Ordering::SeqCst) {
             let busy = self.server.as_ref().is_some_and(|s| {
                 !s.clients.lock().unwrap().is_empty()
@@ -1455,7 +1497,11 @@ fn run_gui(args: &[String]) {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([420.0, 250.0])
-            .with_min_inner_size([380.0, 230.0]),
+            .with_min_inner_size([380.0, 230.0])
+            // No minimize button: minimizing a winit window busy-spins a CPU core on Windows,
+            // and eframe stops calling update() while minimized so we can't react to it.
+            // The close (X) button is the way to the tray (it fires update() reliably).
+            .with_minimize_button(false),
         ..Default::default()
     };
     let res = eframe::run_native(
